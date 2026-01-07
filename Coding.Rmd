@@ -1,0 +1,1492 @@
+---
+title: "Bayesian Inferance Coding"
+author: "Bartu Kadir Tamer"
+date: "2024-12-08"
+output: html_document
+---
+
+
+
+
+Uploading Library:
+
+```{r}
+library(ggplot2)
+library(bayesplot)
+library(rstan)
+library(rstanarm)
+```
+# Example of Conjugate Beta - Binomial Model:
+
+
+$$posterior=p(\theta|y_i) \propto p(\theta_i)\times p(y_i|\theta_i)$$
+
+Likelihood $p(y_i|\theta_i)$ is coming from $Binom(n,\theta)$
+Prior $P(\theta_i)$ is coming from $Beta(a,b)$
+
+```{r}
+a=1
+b=1
+
+n=20
+r=15
+S=10^6
+
+
+a_prime=a+r
+b_prime=n-r+b
+
+post=rbeta(n=S,shape1=a_prime,shape2=b_prime)
+
+```
+
+
+
+
+```{r}
+# visualization of the posterior (samples)
+hist(post, breaks = 30, probability = T, 
+     main = "Posterior of theta", xlab = "theta")
+# theoretical distribution of the posterior
+curve(expr = dbeta(x, shape1 = a_prime, shape2 = b_prime), 
+      from = 0, to = 1,col = 2, add = T)
+```
+
+
+```{r}
+mean(post)
+a_prime / (a_prime + b_prime)
+```
+```{r}
+sd(post)
+sqrt((a_prime * b_prime) / ((a_prime + b_prime) ^ 2 * (a_prime + b_prime + 1)))
+```
+```{r}
+# quantiles
+p <- c(0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+quantile(post, probs = p)
+qbeta(p = p, shape1 = a_prime, shape2 = b_prime)
+
+# Monte Carlo SE
+sd(post)/sqrt(S)
+
+
+```
+Low Monte Carlo standard error which means that model accuracy is high.
+
+
+
+# Example Conjugate Normal Model:
+
+
+Normal Prior for the Mean : hyperparameters
+
+
+```{r}
+theta_0=0
+phi_0=1
+```
+
+
+Inverse gamma prior for variance: hyperparameters
+
+
+```{r}
+nu_0 <- 1
+S_0 <- 1
+```
+
+Sample Size:
+
+```{r}
+n=40
+```
+
+
+
+```{r}
+set.seed(123)
+y=rnorm(n,mean=1,sd=1)
+
+mean(y)
+var(y)
+```
+
+
+
+
+Gibbs Sampler:
+
+
+```{r}
+B <- 1e4
+
+
+# Create vector for realizations
+theta_sample <- numeric(B) #mean
+phi_sample <- numeric(B) #variance
+```
+
+
+```{r}
+#Initialize
+theta_sample[1] <- 0
+phi_sample[1] <- 1
+
+# loop
+for (i in 2:B) {
+  
+  theta_1_num  <- (sum(y)/phi_sample[i-1]) + (theta_0/phi_0)
+  phi_1  <- 1/((1/phi_0) +(n/phi_sample[i-1]))
+  theta_1 <- theta_1_num * phi_1
+  theta_sample[i] <- rnorm(1, mean = theta_1, sd = sqrt(phi_1))
+  
+  a_1 <- nu_0/2 + n/2
+  b_1  <- S_0/2 + sum((y-theta_sample[i])^2)/2
+  phi_sample[i] <- 1/rgamma(1, shape = a_1, rate = b_1)
+  
+  
+}
+
+# Joint posterior distribution
+par(mfrow = c(1,1))
+plot(theta_sample, phi_sample, 
+     xlab = expression(theta), 
+     ylab = expression(phi), 
+     main = "Joint posterior distribution")
+
+# Marginal posteriors
+hist(theta_sample, breaks = 30, xlab = expression(theta), 
+     main = expression(paste("Posterior of ", theta)))
+mean(theta_sample); sd(theta_sample)
+quantile(theta_sample, probs = c(0.025, 0.25, 0.5, 0.75, 0.095))
+
+hist(phi_sample, breaks = 30, xlab = expression(phi), 
+     main = expression(paste("Posterior of ", phi)))
+mean(phi_sample); sd(phi_sample)
+quantile(phi_sample, probs = c(0.025, 0.25, 0.5, 0.75, 0.095))
+
+# Markov chains
+par(mfrow = c(2,1))
+plot(theta_sample, ylab = expression(theta), 
+     xlab = "Iteration", type = "l",
+     main = "Markov chains")
+plot(phi_sample, ylab = expression(phi), xlab = "Iteration", type = "l")
+
+```
+
+
+
+## Example: two-dimensional normal distribution 
+
+```{r}
+
+# set the parameter and observation values
+y <- c(0,0)
+rho <- -0.7
+
+# define conditional posterior distributions
+mu1_update <- function(y, rho, mu2) rnorm(1, y[1] + rho * (mu2-y[2]), sqrt(1-rho^2))
+mu2_update <- function(y, rho, mu1) rnorm(1, y[2] + rho * (mu1-y[1]), sqrt(1-rho^2))
+
+# Note that in R the normal distribution is parametrized with standard deviation, 
+# not variance, so that the parameters are (mu, sigma) instead of the usual 
+# parameters (mu, sigma^2). 
+
+# set a random initial value (2, 2) for mu, and start sampling:
+n_sim <- 1000
+mu1 <- mu2 <- numeric(n_sim)
+
+mu1[1] <- 2
+mu2[1] <- 2
+
+for(i in 2:n_sim) {
+  mu1[i] <- mu1_update(y, rho, mu2[i-1])
+  mu2[i] <- mu2_update(y, rho, mu1[i])
+}
+
+# examine the trace of the sampler after 10, 100, and 1000 simulation rounds:
+draw_gibbs <- function(mu1, mu2, S, points = FALSE) {
+  plot(mu1[1], mu2[1], pch = 4, lwd = 2, xlim = c(-4,4), ylim = c(-4,4), asp = 1,
+       xlab = expression(mu[1]), ylab = expression(mu[2]), bty = 'n', col = 'darkred')
+  for(j in 2:S) {
+    lines(c(mu1[j-1], mu1[j]), c(mu2[j-1], mu2[j-1]), type = 'l', col = 'darkred')
+    lines(c(mu1[j], mu1[j]), c(mu2[j-1], mu2[j]), type = 'l', col = 'darkred')
+    if(points) points(mu1[j], mu2[j], pch = 16, col = 'darkred')
+  }
+  text(x = -3, y = -2.5, paste0('S=', S), cex = 1.75)
+}
+draw_sample <- function(mu1, mu2, ...) {
+  plot(mu1, mu2, pch = 16, col = 'darkgreen',
+       xlim = c(-4,4), ylim = c(-4,4), asp = 1, xlab = expression(mu[1]),
+       ylab = expression(mu[2]), bty = 'n', ...)
+}
+par(mfrow = c(2,2), mar = c(2,2,4,4))
+draw_gibbs(mu1, mu2, 10, points = TRUE)
+draw_gibbs(mu1, mu2, 100)
+draw_gibbs(mu1, mu2, n_sim)
+draw_sample(mu1[10:length(mu1)], mu2[10:length(mu2)], cex = 0.7)
+
+# compare with the iid sample from the true posterior distribution:
+Sigma <- matrix(c(1, rho, rho, 1), ncol = 2)
+X <- MASS::mvrnorm(n_sim, y, Sigma)
+par(mfrow = c(1,2), mar = c(2,2,4,4))
+draw_sample(mu1[10:length(mu1)], mu2[10:length(mu2)], cex = 0.5, main = 'MCMC')
+draw_sample(X[ ,1], X[ ,2], cex = 0.5, main ='i.i.d.')
+
+```
+
+
+
+Creating the Stan Modeling:
+
+
+Creating Normal Distributions:
+
+
+```{r}
+set.seed(123)
+
+n=100
+
+
+x1 <- rnorm (n = n, mean = 1, sd = 0.5)
+x2 <- rnorm (n = n, mean = 0.5 , sd = 0.25)
+X <- cbind (x1 , x2)
+
+sigma <- 1
+beta <- c(1, 2)
+y <- rnorm (n = n, mean = X %*% beta , sd = sigma )
+
+```
+
+
+#The Gaussian Linear Model is conducted:
+
+
+1) Creating the Likelihood:
+
+$Y_i|\mu_i \sim N(\mu_i,\sigma^2)$    where i = 1,2,3,...n
+$\mu_i|\beta_i=\beta_0+\beta_1x_1+....+\beta_nx_n$ i=1,2,...,n
+
+
+2) Creating Priors:
+
+$\beta_p \sim N(0,c)$     where p=1,2,..n;
+$\sigma \sim half-Cauchy$ 
+
+
+3) Creating Hyperparameters
+
+
+Notes About the rstanarm functions:
+
+stan_glm: Allows to make Bayesian Inference for GLM.
+stan_glmer: Allows to make Bayesian Inference for GLM with RANDOM EFFECTS.
+
+formula: Expressing model equation.
+data: data frame that includes the variables declared in formula in the statement. 
+family: distributional assumption; gaussian,binomial and poisson.
+
+Multichain approach used: Two or more parallel Monte Carlo Markov chains are simulated in order to check convergence.
+                          Each chain uses different starting values for testing robustness of the algorithm.
+                          
+                          
+                          
+chains: Number of the parallel chains
+warmup: Number of warmup not included in inference 
+iter :  Number of iterations
+init:   List of lists with fixed starting values
+
+
+
+
+
+```{r}
+
+df=data.frame(y,x1,x2)
+equation=y~x1+x2
+c=10
+
+stan_fit=stan_glm(formula = equation,data=df,family="gaussian",prior=normal(0,c),
+                  prior_intercept = normal(0,c),
+                  prior_aux = cauchy(0,1))
+
+```
+
+
+
+
+## Checking The Model:
+
+### 1) Checking convergence of the model:
+
+A) Using Traceplot: 
+
+In case of convergence the series must be regular and stationary and different chain are overlapped.
+The warmup iterations are included in order to check if the selected number is sufficient.
+Convergence the sample is should not converge to single point.
+
+
+```{r}
+stan_trace(stan_fit,pars = c("sigma","(Intercept)","x1","x2"))
+```
+
+Seems all of the parameters are converge.
+
+
+
+B) Checking Results Overview:
+
+```{r}
+summary(stan_fit)
+```
+
+If the Rhat is greater than 1 (1.05) at least one chain is not converged.
+If the $Rhat \sim 1$ all the chains reached the equilibrium distribution.
+
+Important: The Rhat is based on normality assumption. 
+We can also plot the Rhat if we have lots of parameters.
+
+
+```{r}
+plot(stan_fit,plotfun = "rhat")
+```
+
+All of the variables converged since plot indicates that all the values in the level 1.
+
+
+C) Checking $\hat{N_{eff}}$ :
+
+Effective sample size helps to measure autocorrelation. If the autocorrelation presence uncertainty increases.
+
+A value of $\hat{N_{eff}}$ is lower than N shows potential issues of autocorrelation.
+
+
+D) Checking Autocorrelation:
+
+We can use plot to check autocorrelation.
+
+```{r}
+stan_ac(stan_fit,pars=c("sigma","(Intercept)","x1","x2"))
+```
+
+
+ACF plots shows that there is no slow decrease in the lags it can be said that convergence is present in the model.
+In case of slow decay of the ACF it is possible to weak simulation.
+
+
+### 2) Checking Model Assumptions:
+
+The usual residual check is still valid.
+The statistical tests are not valid.
+The best way to check Bayesian model assumption is checking the Posterior Predictive Distribution. It is based on posterior predictive model checking it can be said that is Bayesian p-value. It evaluates the goodness of fit of the model.
+Deviance Based methods (WAIC).
+Different prior specifications.
+
+Posterior Predictive Distribution defined as:
+
+$$P(y_{rep}|y)= \int_{\Theta} p(y_{rep}|y,\theta)p(\theta|y)d\theta$$
+$$=\int_{\Theta} p(y_{rep}|\theta)p(\theta|y)d\theta$$
+
+It represents a natural starting point to evaluate the discrepancy between real data and the replicated ones. In this way it is possible to generate a new dataset that replicates the observed one at each Monte Carlo iteration.
+
+
+```{r}
+post_pred=posterior_predict(stan_fit)
+ppc_dens_overlay(y = y,yrep = post_pred [40:100 ,])
+```
+
+
+Plot indicates comparison between Empirical density functions of real data and empirical distribution of the replicated datasets.
+
+
+For checking the PPD we need to state appropriate discrepancy measure. 
+Discrepancy measures are functions of the parameters vector and data and they
+could be specified as $D(y; \theta)$ (remember that a test statistics must be functions
+of data only).
+
+Posterior predictive p-value (Bayesian p-value):
+
+$$p_B=P[D(y_{rep}) \ge D(y,\theta|y)]$$
+$$p_B=\int\int1_{D(y_{rep,\theta})\ge D(y,\theta)}P(y_{rep}|\theta)P(\theta|y)dy_{rep}d\theta$$
+
+If the result of the Bayesian P-value is near 1 or 0 the model should be considered not appropriate to fit the data. Graphical output is usually enough.
+
+
+
+```{r}
+ppc_stat(y=y,yrep = post_pred,stat = "mean")
+```
+
+
+
+Light blue bars show the distribution of the chosen test statistics $T(y_{rep})$ calculated from the replicated data $y_{rep}$
+Shows the what the model predicts as plausible values for the statistics.
+Dark blue line shows that value of the test statistics from the observed data y.
+Test statistics in this case chosen as mean. Test statistics show the central tendency of the observed data to predictions from the model.
+
+
+
+Interpretation of the Plot:
+
+Goal of the plot is to evaluate observed data y are consistent with the model's posterior prediction.
+Since the observed Test statistics lies in range of the Test repeated data model is consistent with the observed data.
+If the blue line were far in the tails or outside the range of the histogram, it would indicate a potential lack of model fit for this statistic.
+If the observed statistic is within the range of the simulated statistics, it suggests that the model is able to generate data similar to the observed data.
+If the observed statistic is far from the simulated distribution, this indicates a poor fit, suggesting that the model is not capturing some important aspect of the data.
+The vertical line represents the summary statistic computed from the observed data.
+The distribution (e.g., histogram, density) shows the distribution of the same statistic computed from the posterior predictive samples.
+If the observed statistic is inside the bulk of the posterior predictive distribution, it suggests that the model is fitting the data reasonably well.
+If the observed statistic is an outlier (far from the bulk of the distribution), it indicates that the model may not be capturing the data structure well and needs improvement.
+
+
+
+WAIC:
+
+
+
+$$WAIC = -2(\hat{lppd}-P_{WAIC})$$
+
+
+
+Log Pointwise Predictive Density: a measure aimed at summarizing the
+predictive accuracy of the fitted model to the sample
+
+
+$$\hat{lppd}=\sum log(\frac{1}{K}\sum p(y_i|\theta_{(k)}^*))$$
+
+A correction for the effective number of parameters based on the
+posterior variance of the predictive density of each data point:
+
+
+$$P_{WAIC}=\sum_{i=1}^n \hat{V}[logp(y_i|\theta_{(.)}^*)]$$
+
+Best WAIC is the lower one.
+
+
+```{r}
+waic(stan_fit)
+```
+
+
+### Summarize Posterior Distribution:
+
+After the usual checks of the model assumptions, it is possible to derive easily the
+Bayes estimators (both point and intervals) of the quantity of interest.
+
+```{r}
+summary(stan_fit,pars=c("sigma",("Intercept"),"x1","x2"))
+```
+
+Estimates:
+
+Intercept:
+Mean: 0.4 – The average intercept in the posterior samples.
+SD: 0.3 – Standard deviation (uncertainty) in the intercept estimate.
+Posterior Quantiles (10%, 50%, 90%):
+Median (50%) is 0.4, with a range from -0.1 to 0.7 (credible interval)
+
+x1 :
+Mean: 0.7 – The average effect of x1 on y (positive relationship).
+SD: 0.2 – There is moderate uncertainty in this estimate.
+The 10%-90% credible interval spans from 0.5 to 1.0, meaning most posterior samples suggest x1 has a positive effect.
+
+
+x2:
+Mean: 2.1 – A strong positive effect of x2 on y.
+SD: 0.4 – Higher uncertainty compared to x1.
+The 10%-90% range is from 1.6 to 2.6, suggesting consistent evidence of a positive effect.
+
+
+sigma:
+Mean: 1.0 – This is the residual standard deviation, indicating the variability in y not explained by the predictors.
+
+
+Fit Diagnostics
+mean_PPD (Mean Posterior Predictive Distribution):
+Mean: 2.1 – The average predicted value of y based on posterior samples.
+SD: 0.1 – Low variability in predictions.
+Credible interval (10%-90%): Ranges from 1.9 to 2.3.
+
+
+MCMC Diagnostics
+mcse (Monte Carlo Standard Error): Near 0 for all parameters, indicating sufficient MCMC sampling precision.
+Rhat: Equals 1.0 for all parameters, indicating convergence of the MCMC chains.
+n_eff (Effective Sample Size): High values (above 4000 for most parameters), indicating robust and well-mixed chains.
+
+
+
+
+
+Summary Interpretation
+
+Parameter Estimates:
+Both x1 and x2 have positive effects on y, with x2 showing a much larger magnitude.
+The credible intervals do not include zero, supporting the significance of these predictors.
+
+
+Model Fit:
+The posterior predictive mean (mean_PPD) aligns closely with the observed data, suggesting the model captures the central tendency well.
+
+
+Diagnostics:
+Low Monte Carlo error, Rhat=1.0, and high effective sample sizes indicate reliable and converged posterior samples.
+
+
+
+```{r}
+stan_hist(stan_fit,pars=c("sigma","(Intercept)","x1","x2"))
+```
+
+
+These histograms show the sampled values for the specified parameters, giving insight into their posterior distributions.
+
+Sigma(Residuals Standard Deviation):
+The distribution of sigma peaks around 1.0, which aligns with the summary output. This indicates the model's residual variability is approximately 1.0. The spread is relatively narrow (about 0.8 to 1.2), suggesting high confidence in this estimate
+
+
+Intercept:
+The posterior for the intercept is centered around 0.4, with some variability.
+The distribution suggests that while 0.4 is the most likely value for the intercept, values between approximately -0.2 and 1.0 are plausible within the posterior.
+
+
+X1:
+The posterior distribution for x1 is centered around 0.7, indicating a positive association between x1 and the outcome variable.
+The range of plausible values (posterior samples) is relatively narrow, approximately 0.4 to 1.0, showing strong evidence for this effect.
+
+X2:
+The posterior for x2 is centered around 2.1, suggesting a strong positive relationship between x2 and the outcome variable.
+The distribution is wider than for x1, indicating more uncertainty in the estimate, but the overall evidence points to a consistently positive effect.
+
+
+Interpretability: These histograms provide a visual summary of the posterior distributions, highlighting the most likely values (peaks) and the uncertainty (spread).
+Credibility: The posterior distributions are unimodal and reasonably symmetric, indicating well-behaved parameter estimates.
+Bayesian Uncertainty: The width of each histogram represents the uncertainty around the parameter estimates, with wider distributions (like x2) suggesting greater uncertainty compared to narrower ones (like sigma).
+
+
+
+```{r}
+plot(stan_fit,pars=c("sigma","(Intercept)","x1","x2"))
+```
+
+We can use the same interpretations as we did in the histograms.
+
+
+
+# Normal Linear Regression:
+
+
+Uploading the dataset:
+
+```{r}
+df=read.csv("Data_Ex_1.csv",header = T)
+head(df)
+```
+
+Time variable is our response variables and the amount distance variables are our independent variables.
+
+
+# Writing the theoretical form of the regression:
+
+
+$$y_i|\beta_i,\sigma^2 \sim N(\theta_i,\sigma^2)$$
+$$\theta_i|\beta=\beta_0+\beta_1x_{i1}+\beta_2x_{i2}$$
+Y=Time
+x1=amount
+x2=distance
+
+
+## Model with default priors:
+
+
+```{r}
+stan_fit1=stan_glm(time~amount+distance,family="gaussian",data=df)
+```
+
+
+Default priors in the rstanarm are generally not flat priors.Defaults are created to be weakly informative. 
+
+```{r}
+prior_summary(stan_fit1)
+```
+
+Intercept:
+Specified Prior:
+A normal prior with a mean (location) of 22 and a standard deviation (scale) of 2.5.
+This indicates that, prior to observing the data, the model expects the intercept to likely be around 22 with moderate uncertainty.
+Adjusted Prior:
+A normal prior with a mean of 22 and a standard deviation of 39.
+This adjustment accounts for the fact that the predictors were centered, which changes the scale and influence of the intercept. The large standard deviation (39) reflects weaker prior information about the intercept after centering.
+
+
+
+
+Coefficients
+Specified Prior:
+A normal prior with mean 0 and standard deviation 2.5 for both predictors (x1 and x2).
+This indicates that, prior to observing the data, the model assumes the coefficients are likely close to zero, but allows for moderate variability.
+
+Adjusted Prior:
+A normal prior with:
+For x1: mean 0, standard deviation 5.64.
+For x2: mean 0, standard deviation 0.12.
+The adjustment reflects the rescaling or centering of predictors, which can affect the magnitude and spread of priors.
+For x1, the larger standard deviation (5.64) indicates weak prior information, allowing more flexibility for the coefficient.
+For x2, the smaller standard deviation (0.12) suggests stronger prior information, indicating the model expects this coefficient to remain closer to zero.
+
+
+Auxiliary Parameter (sigma)
+Specified Prior:
+An exponential prior with a rate parameter of 1.
+This assumes the residual standard deviation (sigma) is likely small (near zero), but allows larger values with decreasing probability.
+Adjusted Prior:
+An exponential prior with a rate parameter of 0.064.
+The adjustment reflects rescaling in the model, resulting in a weaker prior, allowing larger values of sigma.
+
+
+
+
+Default Priors:
+The rstanarm package uses weakly informative priors by default to stabilize estimation while allowing the data to dominate. These priors are typically centered around reasonable values with enough flexibility for exploration.
+
+Priors Adjusted for Centering:
+Adjusted priors reflect transformations or scaling of the data (e.g., centering predictors). This helps the priors align with the scaled data, ensuring coherence in the Bayesian framework.
+
+Interpretation of Priors:
+Intercept: Centered on 22 with high uncertainty after adjustment (39 SD). x1: Weakly informative, with wide prior (SD 5.64).
+x2: Stronger prior constraint near zero (SD 0.12).
+sigma: Allows a wide range of residual variability.
+
+
+## Model with flat prior:
+
+Non-informative" or uninformative is used in the context of prior
+distributions, it typically refers to a at (uniform) distribution or a nearly at distribution. Sometimes it may also be used to refer to the parameterization-invariant Jeffreys priors. Unless the data is very strong it is wise to avoid them.
+
+
+```{r}
+stan_flat=stan_glm(formula=time~amount+distance,data=df,family="gaussian",prior = NULL)
+```
+
+
+```{r}
+prior_summary(stan_flat)
+```
+Intercept (After Centering Predictors)
+Specified Prior:
+A normal prior with Mean (location) = 22,Standard deviation (scale) = 2.5.
+This prior indicates that, before observing the data, the model assumes the intercept is likely around 22, with some uncertainty (2.5 SD).
+Adjusted Prior:
+After centering the predictors, the prior on the intercept is adjusted to Mean = 22 Standard deviation = 39.
+The adjustment weakens the prior (larger SD) to reflect the scaling effect of centering the predictors, resulting in greater flexibility in the posterior estimation of the intercept.
+
+
+
+Coefficients
+Flat Prior:
+The coefficients for the predictors (e.g., x1 x2) have flat priors.
+A flat prior indicates no prior information about the likely values of these coefficients. It essentially assigns equal probability to all values within the range of real numbers (practically constrained by the numerical limits of computation).
+This means the posterior distributions of the coefficients will rely entirely on the observed data, with no influence from prior beliefs.
+
+
+
+Auxiliary Parameter (sigma)
+
+Specified Prior:
+An exponential prior with a rate parameter of 1.
+This implies that smaller values of the residual standard deviation (sigma) are more likely, but larger values are allowed with decreasing probability.
+
+Adjusted Prior:
+After adjustments for scaling, the prior becomes:
+Exponential(rate = 0.064).
+The weaker rate parameter allows for more flexibility, increasing the likelihood of larger sigma values.
+
+
+
+Flat Priors on Coefficients:
+The flat prior means the model makes no assumptions about the coefficients. This is the least informative prior and allows the posterior distributions to depend solely on the data.
+
+Intercept and sigma:
+Priors are specified for the intercept and residual standard deviation (sigma). These are weakly informative priors to provide some stability in estimation.
+
+Flat Priors vs Default Priors in rstanarm:
+Unlike stan_glm's default weakly informative priors (e.g., normal priors for coefficients), the flat priors here make the model fully data-driven for the coefficients.
+
+
+Use Case for Flat Priors
+Flat priors are often used when:
+You have no prior knowledge about the coefficients and want the posterior to reflect only the data.
+You are conducting a sensitivity analysis to compare results with and without priors.
+However, flat priors can sometimes lead to unstable or overconfident estimates, especially with limited data.
+
+
+
+
+## Creating Model with Informative Prior with N(0; 100) prior for the regression coefficients and the intercept, and a Half Cauchy(0; 1) for sigma:
+
+Likelihood:
+
+$$y_i|\theta_i,\sigma^2 \sim N(\theta_i,\sigma^2)$$
+$$\theta_i|\beta=\beta_0+\beta_1x_{i1}+\beta_2x_{i2}$$
+Priors:
+
+$$\beta_k \sim N(0,100)$$
+$$\beta_0 \sim N(0,100)$$
+$$\sigma \sim Half-Cauchy(0,1)$$
+
+
+```{r}
+mod_ex1 <- stan_glm( formula = time ~ amount + distance ,
+data = df ,
+family = "gaussian",
+prior = normal (0 ,100) ,
+prior_intercept = normal (0 ,100) ,
+prior_aux = cauchy (0 ,1))
+```
+
+
+
+
+```{r}
+prior_summary(mod_ex1)
+```
+
+Intercept (After Centering Predictors)
+Prior: Normal(0,100)
+Mean (location) = 0: The prior belief is that the intercept is centered around 0.
+Standard deviation (scale) = 100: The prior allows for a very wide range of possible intercept values, reflecting very weak information about the intercept (nearly flat but technically still informative).
+Interpretation: This prior is so weakly informative (due to the large scale) that it places minimal constraints on the intercept.
+
+Coefficients
+Prior:Normal(0,100) for each coefficient
+Each coefficient has:
+Mean (location) = 0: The prior assumes, before observing the data, that the coefficients are likely to be close to 0 (no relationship between predictors and response variable).
+Standard deviation (scale) = 100: A very large standard deviation reflects high uncertainty, allowing coefficients to take on values far from 0.
+Interpretation: These weakly informative priors allow the coefficients to vary widely, but they still introduce a slight preference for smaller values closer to 0.
+
+
+Auxiliary Parameter (sigma)
+Prior: Half-Cauchy(0,1)
+The half-Cauchy distribution is a common prior for scale parameters (like sigma).
+It is:
+Centered at 0, meaning smaller values of sigma (less noise in the data) are considered more likely.
+Heavy-tailed, so it still allows for larger values of sigma (greater noise) with decreasing probability.
+Interpretation: This prior is informative for sigma, favoring smaller values of residual standard deviation while not completely ruling out larger ones.
+
+
+
+Intercept and Coefficients:
+The priors are very weakly informative due to the large scale (SD = 100), allowing the data to dominate the posterior estimates.
+These priors serve as a safeguard against extreme values without introducing strong prior beliefs.
+
+Auxiliary Parameter (sigma):
+The half-Cauchy prior on sigma is a standard choice to constrain the variability of residual errors while still allowing for flexibility.
+
+Informative Nature:
+While the priors for the intercept and coefficients are technically informative (not flat), their large scale makes them behave nearly like flat priors.
+The prior on sigma is genuinely informative, favoring lower values for the residual variability.
+
+
+These priors are suitable when:
+You want to lightly constrain parameter estimates to avoid extreme values but still allow the data to dominate the posterior.
+The dataset is large enough to provide robust estimates without strong priors.
+
+#### Checking the Convergence of the algorithm:
+
+
+```{r}
+stan_trace(mod_ex1,nrow = 3, ncol = 1, inc_warmup = T)
+stan_trace(stan_fit1,nrow = 3, ncol = 1, inc_warmup = T)
+stan_trace(stan_flat,nrow = 3, ncol = 1, inc_warmup = T)
+```
+Seems all the parameters are converged. 
+
+
+```{r}
+stan_ac(mod_ex1)
+```
+Since plots not showing any slow decay it can be said that there is no autocorrelation problem. 
+
+
+
+```{r}
+summary(mod_ex1)
+```
+
+
+
+All of the variables converged since Rhat value indicates that all the values in the level 1. In addition to that mean PPD is the sample average posterior predictive distribution of the
+outcome. A useful heuristic is to check if mean PPD is plausible when compared to mean(y).If it is plausible then this does not mean that the model is good in general (only that it can reproduce the sample mean), however if mean PPD is implausible then it is a sign that something is wrong (severe model misspecification, problems with
+the data, computational issues, etc.).
+
+
+
+```{r}
+plot(mod_ex1,plotfun="rhat")
+```
+
+
+
+All of the variables converged since plot indicates that all the values in the level 1 or near to 1 and not greater than 1.05
+
+
+
+#### Posterior Predictive Checking:
+
+
+```{r}
+y_hat=posterior_predict(mod_ex1)
+str(y_hat)
+```
+
+We created 4000 new datasets.
+
+
+
+
+Densities Comparison:
+
+```{r}
+ppc_dens_overlay(y=df$time,yrep=y_hat[1000:1080,])
+```
+
+
+
+Plot indicates comparison between Empirical density functions of real data and empirical distribution of the replicated datasets.
+It seems both densities close to each other.
+
+
+Posterior Predictive Check:
+
+```{r}
+ppc_stat(y = df$time,yrep = y_hat,stat = "mean")
+ppc_stat(y = df$time,yrep = y_hat,stat = "sd")
+ppc_stat(y = df$time , yrep = y_hat , stat = "min")
+ppc_stat(y = df$time , yrep = y_hat , stat = "max")
+```
+
+
+
+Posterior Infrence:
+
+```{r}
+summary(mod_ex1,digits=4)
+```
+
+
+```{r}
+stan_hist(mod_ex1)
+```
+
+
+Extract the posterior draws of the linear predictor:
+
+```{r}
+mu <- posterior_linpred(mod_ex1)
+mean(mu[ ,10])
+sd(mu[ ,10])
+quantile(mu[ ,10],probs = c (0.05 ,0.5 ,0.95))
+```
+Reporting the 90% credibility interval of the posterior distribution of observation
+number 10.
+
+
+
+Monitoring $R^2_B$ 
+
+$$R^2_B=1-\frac{\sigma^2}{s^2(y)}$$
+
+It serves as an analog to the frequentist R2 (coeffcient of determination) but is adapted for Bayesian analysis to account for uncertainty in the model parameters.
+It is not a single value but a distribution.
+$R^2_B$ close to 1 indicates that the model explains most of the variation in the
+data, while values close to 0 indicate poor explanatory power.
+It can be used to compare different Bayesian models, where a higher $R^2_B$ suggests better explanatory power.
+
+
+
+```{r}
+sigma_post <- as.matrix(mod_ex1,pars = "sigma")
+n<-nrow(df)
+var_y <- var(df$time)*(n-1) /n
+R2bayes <- 1- sigma_post^2/var_y
+
+mean(R2bayes)
+sd(R2bayes)
+quantile ( R2bayes , probs = c (0.025 ,0.5 ,0.975))
+```
+
+Seems our model explains most of the variation respect to the bayesian R^2
+
+```{r}
+hist(R2bayes,breaks = 30)
+```
+
+
+The plot visualizes the posterior uncertainty about the Bayesian R2 estimate, showing the most likely 
+R2 value and the range of plausible values.
+This is useful for understanding how well the model explains the variability in the data. A high R2 with a narrow credible interval indicates a strong and confident model fit, while a low or wide 
+R2 suggests less explained variance or uncertainty in the model.
+
+
+# Conducting Bayesian Hierarcihcal Model:
+
+A random effect included in the model to account for the county of the measurement a Bayesian Hierarchical model.
+
+
+
+```{r}
+df2=read.csv("Data_Ex_2.csv",header = T)
+head(df2)
+```
+
+
+
+## Random Intercept Model:
+
+
+Likelihood:
+
+
+$$y_i|\mu_j,\sigma^2 \sim N(\mu_j,\sigma^2)$$
+$$\mu_j,|\beta_{(.)}=\beta_0+\beta_{0(j)}$$
+
+Priors:
+
+$$\sigma \sim \pi(\sigma)$$
+$$\beta_{0(j)}|\sigma^2_{\beta_0} \sim N(0,\sigma^2_{\beta_0})$$
+$$\beta_0 \sim N(0,c)$$
+
+
+Hyperpirior(Hyperparameter):
+
+
+$$\sigma_{\beta_0} \sim \pi(\sigma_{\beta_0})$$ 
+
+
+
+
+```{r}
+random_intercept_mod=stan_lmer(log_radon~(1|county),data=df2)
+```
+
+
+```{r}
+prior_summary(random_intercept_mod)
+```
+
+
+
+```{r}
+summary(random_intercept_mod)
+```
+
+
+
+
+
+```{r}
+stan_trace(random_intercept_mod,pars=c("(Intercept)","sigma","Sigma[county:(Intercept),(Intercept)]"),nrow=3,ncol=1)
+```
+
+
+
+
+```{r}
+plot(random_intercept_mod,plotfun="rhat")
+```
+
+
+Seemms no issue with the convergence from the both of the models.
+
+
+
+
+```{r}
+stan_ac(random_intercept_mod,pars=c("(Intercept)","sigma","Sigma[county:(Intercept),(Intercept)]"))
+```
+
+Seems no issue with the autocorrelation.
+
+
+
+## Model with Random Intercepts and Covariates:
+
+Likelihood:
+
+$$y_{ij}|\mu_{ij},\sigma^2 \sim N(\mu_{ij},\sigma^2)$$
+
+$$\mu_{ij}|\beta=\beta_0+\beta_{0(j)}+\beta_1log(uraniom)+\beta_2floor$$
+Priors:
+
+$$\sigma \sim \pi(\sigma)$$
+$$\beta_{0(j)}|\sigma_{\beta_0}^2 \sim N(0,\sigma_{\beta_0}^2)$$
+
+$$\beta_k \sim N(0,C)$$
+
+
+Hyperprior(Hyperparameters):
+
+
+$$\sigma_{\beta_0} \sim \pi(\sigma_{\beta_0})$$
+
+```{r}
+model_ri_cov=stan_lmer(log_radon~(1|county)+log_uranium+floor,data=df2)
+```
+
+
+
+```{r}
+summary(model_ri_cov)
+```
+
+
+
+
+```{r}
+stan_trace(model_ri_cov,pars=c("sigma","Sigma[county:(Intercept),(Intercept)]","log_uranium","floorfirst","(Intercept)")
+           ,nrow=5,ncol=1)
+```
+
+
+
+```{r}
+plot(model_ri_cov,plotfun="rhat")
+```
+
+
+
+
+```{r}
+stan_ac(model_ri_cov,pars=c("sigma","Sigma[county:(Intercept),(Intercept)]","log_uranium","floorfirst","(Intercept)"))
+```
+
+
+## Model Random Intercepts, Covariates with Random Slopes:
+
+
+
+Likelihood:
+
+$$y_{ij}|\mu_{ij},\sigma^2 \sim N(\mu_{ij},\sigma^2)$$
+
+$$\mu_{ij}|\beta = \beta_0+\beta_{0(j)}+\beta_1log(uranium)_{ij}+\beta_{2(j)}floor_{ij}$$
+
+
+Priors:
+
+
+$$\sigma \sim \pi(\sigma)$$
+$$\beta_{0j}|\sigma^2_{\beta_0} \sim N(0,\sigma_{\beta_0}^2)$$
+$$\beta_{k} \sim N(0,C)$$
+
+$$\beta_{2(j)}|\beta_2,\sigma_{\beta_2}^2 \sim N(\beta_2,\sigma_{\beta_2}^2)$$
+
+
+Hyperpriors(Hyperparameters):
+
+
+
+$$\begin{equation}
+\Sigma = 
+\begin{pmatrix}
+  \sigma_{\beta_0}^2 & \sigma_{\beta_0,\beta_2} \\
+  \sigma_{\beta_0,\beta_2} & \sigma_{\beta_2}^2\\
+\end{pmatrix} = \pi(\Sigma)
+\end{equation}$$
+
+
+
+```{r}
+mod3=stan_lmer(log_radon~log_uranium+floor+(1+floor|county),data=df2)
+```
+
+
+
+```{r}
+summary(mod3)
+```
+
+Sigma[county:floorfirst,floorfirst] variables neff seems problematic which might mean problem in autocorrelation.
+
+
+
+```{r}
+mod3.1 <- update (mod3 , iter =5000)
+```
+
+
+
+
+```{r}
+summary(mod3.1)
+```
+
+Seems autocorrelation problem is not present in the model anymore after updating the model with 5000 iterations.
+
+
+
+```{r}
+stan_trace(mod3.1,pars=c("(Intercept)","sigma","Sigma[county:(Intercept),(Intercept)]"
+                         ,"Sigma[county:floorfirst,floorfirst]","log_uranium","floorfirst"))
+
+```
+
+No issue with the convergence.
+
+
+```{r}
+plot(mod3.1,plotfun="rhat")
+```
+
+
+
+```{r}
+stan_ac(mod3.1,pars=c("(Intercept)","sigma","Sigma[county:(Intercept),(Intercept)]"
+                         ,"Sigma[county:floorfirst,floorfirst]","log_uranium","floorfirst"))
+```
+
+
+Sigma[county:floorfirst,floorsfirst] variable shows autocorrelation since it has slow decay in the acf plot.
+
+
+Model Choice:
+
+```{r}
+waic(mod3.1)
+waic(model_ri_cov)
+waic(random_intercept_mod)
+```
+
+Model with covariates and random intercept has lower WAIC which means that it is better choose that model.
+
+
+
+#### Summary of the Better Model:
+
+```{r}
+main_pars=c("log_uranium","floorfirst","(Intercept)","Sigma[county:(Intercept),(Intercept)]")
+summary(model_ri_cov,pars=main_pars)
+```
+
+
+
+
+
+Posterior Intervals:
+
+```{r}
+posterior_interval(model_ri_cov,prob=0.9,pars="log_uranium")
+```
+
+$\alpha = 1-P$ since prob = 0.9 here alpha will equal to 0.1. 
+
+```{r}
+posterior_interval(model_ri_cov,prob=0.8,pars="log_uranium")
+```
+
+
+Posterior Predictive Checks:
+
+
+```{r}
+yhat=posterior_predict(model_ri_cov)
+ppc_dens_overlay(y=df2$log_radon,yrep = yhat[1100:1200,])
+```
+
+Seem appropiriate.
+
+
+```{r}
+ppc_stat(y=df2$log_radon,yrep=yhat,stat="mean")
+ppc_stat(y=df2$log_radon,yrep=yhat,stat="sd")
+ppc_stat(y=df2$log_radon,yrep=yhat,stat="median")
+ppc_stat(y=df2$log_radon,yrep=yhat,stat="max")
+ppc_stat(y=df2$log_radon,yrep=yhat,stat="min")
+
+```
+
+
+
+
+# Creating Logistics Regression Model:
+
+It is a GLM with the Bernoulli (or binomial) distribution assumed for data and the
+linear predictor (function of the covariate pattern xi ) is specified for a suitable
+transformation of the probability.
+In particular, the logit function is used:
+
+$$y_i|p_i \sim Ber(p_i)$$
+
+$$log(\frac{p_i}{1-p_i})|\beta = X^T\beta$$
+
+Simple Logistics Regression:
+
+$$log(\frac{P_i}{1-P_i})|\beta = \beta_0+\beta_1race+\beta_2gender$$
+
+
+Logistics Regression with Random Intercept:
+
+$$log(\frac{P_{ij}}{1-P_{ij}})|\beta = \beta_0+\beta_{0(j)}+\beta_1race+\beta_2gender$$
+
+
+
+```{r}
+df3=read.csv("Data_Ex_3.csv",header=T)
+head(df3)
+```
+
+
+```{r}
+mod_bin=stan_glm(bush~black+female,data=df3,family="binomial",iter=4000,warmup=2000)
+```
+
+```{r}
+summary(mod_bin)
+```
+
+```{r}
+stan_trace(mod_bin)
+```
+
+
+
+```{r}
+stan_ac(mod_bin)
+```
+
+
+
+```{r}
+mod_bin_ri=stan_glmer(bush~black+female+(1|state),data=df3,family="binomial",iter=4000,warmup=2000)
+```
+
+
+```{r}
+summary(mod_bin_ri)
+```
+
+```{r}
+stan_trace(mod_bin_ri,pars=c("(Intercept)","blackyes","femaleyes","Sigma[state:(Intercept),(Intercept)]"))
+```
+
+
+```{r}
+stan_ac(mod_bin_ri,pars=c("(Intercept)","blackyes","femaleyes","Sigma[state:(Intercept),(Intercept)]"))
+```
+Sigma[state:(Intercept),(Intercept)] might be problematic interms of autocorrelation
+
+
+```{r}
+waic(mod_bin)
+waic(mod_bin_ri)
+```
+
+It is better to use model with random intercept.
+
+
+## Extra Models:
+
+![Additional Models:](D:/UniBO/Uni Bologna Master/Courses/Bayesian Inference/additional.png){width="65%"}
+
+
+## Poisson Regression Model:
+
+The Poisson model with random effects is usually assumed in order to take
+into account the eventual presence of overdispersion or underdispersion.
+The Poisson distribution has only one parameter (E[Y] = V[Y] = lambda), and in
+fact the variance increases with the mean.
+
+
+Simple Poisson Model:
+
+$$y_i|\mu_i \sim Poisson(\mu_i)$$
+$$log(\mu_i)|\beta = \beta_0+\beta_1log(x_i+10)+\beta_2x_2$$
+$$=\beta_0+\beta_1log(quoline_i+10)+\beta_2quoline_i$$
+$$=\beta_0+\beta_1logquoline+\beta_2quoline$$
+
+$$\beta_k \sim N(0,C)$$
+
+
+```{r}
+df4=read.csv("Data_Ex_4.csv",header=T)
+head(df4)
+```
+
+
+
+
+```{r}
+pois=stan_glm(colonies~quinoline+log_quinoline,data=df4,family="poisson",prior=normal(0,10,autoscale=T)
+              ,prior_intercept=normal(0,10,autoscale = T))
+```
+
+
+```{r}
+prior_summary(pois)
+```
+
+
+```{r}
+pois_new=update(pois,iter=4000)
+```
+
+```{r}
+stan_trace(pois_new,nrow=3,ncol=1)
+```
+
+
+```{r}
+stan_ac(pois_new)
+```
+
+```{r}
+y_tilde4a <- posterior_predict(pois_new)
+ppc_dens_overlay (y=df4$colonies ,yrep=y_tilde4a[1100:1200,])
+```
+
+## Poisson Regression Model with random effects:
+
+To take into account the eventual presence of overdispersion, the term lambdaj ,
+that is plate-speciffic is included in the linear predictor
+
+```{r}
+mod_ex4b <- stan_glmer (formula =
+colonies ~ quinoline +log_quinoline+(1|plate),
+data = df4 ,
+family ="poisson",
+prior = normal (0 ,10 , autoscale =T),
+prior_intercept = normal (0 ,10 , autoscale =T))
+```
+
+```{r}
+mod_ex4b <- update(mod_ex4b , iter =8000)
+summary (mod_ex4b)
+```
+
+
+Likelihood:
+
+$$y_{ij}|\mu_{ij} \sim Poi(\mu_{ij})$$
+$$log(\mu_{ij})|\beta,\lambda_j=\beta_0+\beta_1log(x_{ij}+10)+\beta_2x_{ij}+\lambda_j$$
+
+
+Priors:
+
+$$\lambda_j|\sigma^2_\lambda \sim N(0,\sigma^2_{\lambda})$$
+$$\beta_k \sim N(0,c)$$
+Hyperprior:
+  
+$$\sigma_\lambda \sim \pi(\sigma_\lambda)$$
+
+
+
+```{r}
+prior_summary(mod_ex4b)
+```
+
+
+
+```{r}
+summary(mod_ex4b)
+```
+
+
+
+Classical warning when we work with the Poisson regression with random
+effects.
+
+model <- update (model , adapt _ delta =.99)
+
+adapt delta is the target average proposal acceptance probability
+In general you should not need to change adapt delta unless you see a
+warning message about divergent transitions, in which case you can increase
+adapt delta from the default to a value closer to 1 (e.g. from 0.95 to 0.99,
+or from 0.99 to 0.999, etc).
+The step size used by the numerical integrator is a function of adapt delta
+in that increasing adapt delta will result in a smaller step size and fewer
+divergences.
+Increasing adapt delta will typically result in a slower sampler, but it will
+always lead to a more robust sampler.
+
+
+
+```{r}
+stan_trace(mod_ex4b,nrow=6,ncol=1)
+```
+
+
+
+```{r}
+stan_ac(mod_ex4b)
+```
+
+
+```{r}
+y_tilde4b=posterior_predict(mod_ex4b)
+ppc_dens_overlay(y=df4$colonies,yrep=y_tilde4b[1100:1200,])
+```
+
+
+
+
+```{r}
+ppc_stat(y=df4$colonies,yrep=y_tilde4b,stat="mean")
+ppc_stat(y=df4$colonies,yrep=y_tilde4b,stat="sd")
+```
+
+
+
+## Suppose now that we want to use our model to perform inference on a new covariate pattern quinoline = 500 and plate = "A"
+
+Generating new dataset:
+
+```{r}
+df4_new=data.frame(quinoline =500 ,
+log_quinoline=log(500+10),plate ="A")
+df4_new
+```
+
+```{r}
+mu_new=posterior_epred(mod_ex4b,newdata=df4_new)
+plot(mu_new)
+```
+
+
+```{r}
+y_tilde_new=posterior_predict(mod_ex4b,newdata = df4_new)
+plot(y_tilde_new)
+```
+
+
+```{r}
+plot(density(y_tilde_new),ylim=c(0,0.2),lwd=2,col="darkblue")
+lines(density(mu_new),col="red",lwd=2)
+```
+
+
+
+
+posterior epred (red) computes the expected value of the linear predictor
+for the new data, based on the posterior distribution of the model mod ex4b,
+i.e the posterior distribution of the mean response (linear predictor) for the
+new data.
+posterior predict (black) simulates the posterior predictive distribution,
+which includes both the uncertainty in the model parameters (from the
+posterior) and residual uncertainty (noise).
+The broader black curve indicates that predictions of the actual observed
+data are more uncertain than predictions of the conditional mean.
+The additional variability is due to the nature of the Poisson distribution,
+where variance increases with the mean (overdispersion is not modeled
+explicitly in this case).
+This highlights the importance of distinguishing between the variability in
+expected means (red) and full predictive uncertainty (black).
+
+
+```{r}
+mean(mu_new)
+sd(mu_new)
+mean(y_tilde_new)
+sd(y_tilde_new)
+```
+
